@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 import re
+import os
+import hmac
 from io import BytesIO
 from datetime import date, datetime, timedelta
 from openpyxl.styles import PatternFill
@@ -11,7 +13,64 @@ from openpyxl.styles import PatternFill
 # ============================================================
 st.set_page_config(page_title="交通費CSV→テンプレ増分転記", layout="wide")
 
+
+# ============================================================
+# 共通パスワード（Secrets）でロック
+# ============================================================
+def require_password() -> bool:
+    """
+    Streamlit Community Cloud: st.secrets["APP_PASSWORD"] を利用
+    ローカル開発: 環境変数 APP_PASSWORD でも可（任意）
+    """
+    if "auth_ok" not in st.session_state:
+        st.session_state["auth_ok"] = False
+
+    if st.session_state["auth_ok"]:
+        # ログアウト
+        col_a, col_b = st.columns([1, 6])
+        with col_a:
+            if st.button("ログアウト"):
+                st.session_state["auth_ok"] = False
+                st.rerun()
+        return True
+
+    st.title("ログイン")
+    st.write("社内用パスワードを入力してください。")
+
+    with st.form("login", clear_on_submit=True):
+        pw = st.text_input("パスワード", type="password")
+        ok = st.form_submit_button("入る")
+
+    if ok:
+        secret_pw = None
+        try:
+            secret_pw = st.secrets.get("APP_PASSWORD", None)
+        except Exception:
+            secret_pw = None
+
+        # ローカル用（任意）
+        if secret_pw is None:
+            secret_pw = os.environ.get("APP_PASSWORD")
+
+        if not secret_pw:
+            st.error("パスワードが設定されていません。CloudのSecretsに APP_PASSWORD を設定してください。")
+            st.stop()
+
+        if hmac.compare_digest(pw, str(secret_pw)):
+            st.session_state["auth_ok"] = True
+            st.rerun()
+        else:
+            st.error("パスワードが違います。")
+
+    return False
+
+
+if not require_password():
+    st.stop()
+
+# ============================================================
 # UIちょい改善（ドロップ枠を少し広めに）
+# ============================================================
 st.markdown("""
 <style>
 [data-testid="stFileUploader"] section {
@@ -121,6 +180,7 @@ def extract_in_out(text: str):
 
 # 警告色（薄い赤）
 ALERT_FILL = PatternFill(fill_type="solid", start_color="FFFFC7CE", end_color="FFFFC7CE")
+
 
 # ============================================================
 # アプリ本体
