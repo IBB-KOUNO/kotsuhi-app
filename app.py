@@ -186,7 +186,7 @@ ALERT_FILL = PatternFill(fill_type="solid", start_color="FFFFC7CE", end_color="F
 # アプリ本体
 # ============================================================
 
-st.title("交通費集計（まとめてドロップ → 増分追記 → D列だけ色付け）")
+st.title("交通費集計")
 
 st.write(
     "使い方：**CSV と テンプレExcel（.xlsx）を2つまとめてドラッグ＆ドロップ** → 追記対象だけ転記 → ダウンロード\n\n"
@@ -383,3 +383,4 @@ st.download_button(
     file_name=out_name,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
+
