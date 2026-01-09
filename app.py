@@ -184,7 +184,7 @@ ALERT_FILL = PatternFill(fill_type="solid", start_color="FFFFC7CE", end_color="F
 # アプリ本体
 # ============================================================
 
-st.title("交通費集計（CSVの順番を保って転記：下→上の順）")
+st.title("特約支援交通費集計")
 
 st.write(
     "使い方：**CSV と テンプレExcel（.xlsx）を2つまとめてドラッグ＆ドロップ** → 追記対象だけ転記 → ダウンロード\n\n"
@@ -400,3 +400,4 @@ st.download_button(
     file_name=out_name,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
+
