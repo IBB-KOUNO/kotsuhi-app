@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta
 from openpyxl.styles import PatternFill
 
 # ============================================================
-# アプリ設定（最初に）
+# アプリ設定
 # ============================================================
 st.set_page_config(page_title="交通費CSV→テンプレ増分転記", layout="wide")
 
@@ -26,7 +26,6 @@ def require_password() -> bool:
         st.session_state["auth_ok"] = False
 
     if st.session_state["auth_ok"]:
-        # ログアウト
         col_a, col_b = st.columns([1, 6])
         with col_a:
             if st.button("ログアウト"):
@@ -48,7 +47,6 @@ def require_password() -> bool:
         except Exception:
             secret_pw = None
 
-        # ローカル用（任意）
         if secret_pw is None:
             secret_pw = os.environ.get("APP_PASSWORD")
 
@@ -84,7 +82,7 @@ st.markdown("""
 # ============================================================
 
 def read_csv_safely(uploaded_file) -> pd.DataFrame:
-    raw = uploaded_file.getvalue()  # read()より安定
+    raw = uploaded_file.getvalue()
     for enc in ("utf-8-sig", "cp932", "utf-8"):
         try:
             return pd.read_csv(BytesIO(raw), encoding=enc)
@@ -186,7 +184,7 @@ ALERT_FILL = PatternFill(fill_type="solid", start_color="FFFFC7CE", end_color="F
 # アプリ本体
 # ============================================================
 
-st.title("交通費集計")
+st.title("交通費集計（CSVの順番を保って転記：下→上の順）")
 
 st.write(
     "使い方：**CSV と テンプレExcel（.xlsx）を2つまとめてドラッグ＆ドロップ** → 追記対象だけ転記 → ダウンロード\n\n"
@@ -197,6 +195,7 @@ st.write(
     "- 交通手段(C列)：**電車（固定）**\n"
     "- 出力ファイル名：（JACOM・締め日MMDD）氏名（テンプレB4）\n"
     "- 既にテンプレにある行は触らず、重複しない分だけ追記\n"
+    "- **並び順：CSVの一番下（最古）→一番上（最新）へ、そのまま転記**\n"
     "- 前行の「出」駅 と 次行の「入」駅 が一致しなければ、移動区間(D列)だけ赤くする（固定）\n"
 )
 
@@ -265,9 +264,13 @@ if not (col_date and col_content and col_amount):
     st.error(f"CSV列が足りません。必要: 日付/内容/金額。現在: {list(df.columns)}")
     st.stop()
 
-# CSV → 正規化（自宅/同行判定）
+# ============================================================
+# ★並び順の定義（重要）
+# - CSV上の行番号（上から0,1,2...）を保持
+# - 「一番下→一番上」にしたいので src_index を降順で使う
+# ============================================================
 rows = []
-for _, r in df.iterrows():
+for src_index, r in df.iterrows():
     content = norm_str(r.get(col_content, ""))
 
     d = pd.to_datetime(r.get(col_date), errors="coerce")
@@ -277,6 +280,7 @@ for _, r in df.iterrows():
 
     amt = int(abs(pd.to_numeric(r.get(col_amount, 0), errors="coerce") or 0))
 
+    # 訪問先・目的地（自宅/同行）
     dest = "同行"
     if home_keyword:
         inn, outt = extract_in_out(content)
@@ -287,17 +291,21 @@ for _, r in df.iterrows():
                 dest = "自宅"
 
     rows.append({
+        "__src_index": int(src_index),   # ★CSV行番号（並び保持用）
         "日付": d,
         "訪問先・目的地": dest,
-        "交通手段": "電車",          # ★電車固定
+        "交通手段": "電車",
         "移動区間": content,
         "金額": amt
     })
 
-new_df = pd.DataFrame(rows).sort_values(["日付", "移動区間"], kind="stable")
+new_df = pd.DataFrame(rows)
 
-st.subheader("CSVプレビュー（上位20行）")
-st.dataframe(new_df.head(20), use_container_width=True)
+# ★CSVの一番下→一番上（下から上）で並べる
+new_df = new_df.sort_values("__src_index", ascending=False, kind="stable").reset_index(drop=True)
+
+st.subheader("CSVプレビュー（並び：下→上）（上位20行）")
+st.dataframe(new_df.drop(columns=["__src_index"]).head(20), use_container_width=True)
 
 # 書き込み開始行を特定
 header_row = find_header_row(ws, "日付")
@@ -313,15 +321,18 @@ def make_key(row):
     return (row["日付"], row["訪問先・目的地"], row["交通手段"], row["移動区間"], int(row["金額"]))
 
 new_df["__key__"] = new_df.apply(make_key, axis=1)
-to_add = new_df[~new_df["__key__"].isin(existing_keys)].drop(columns=["__key__"])
+
+# 重複除外（順番は保持される）
+to_add = new_df[~new_df["__key__"].isin(existing_keys)].copy()
+to_add = to_add.sort_values("__src_index", ascending=False, kind="stable").reset_index(drop=True)
 
 st.subheader("判定結果")
 st.write(f"CSV有効行数: {len(new_df)}")
 st.write(f"重複スキップ: {len(new_df) - len(to_add)} 行")
 st.write(f"追記対象: {len(to_add)} 行")
 
-st.subheader("追記プレビュー（上位30行）")
-st.dataframe(to_add.head(30), use_container_width=True)
+st.subheader("追記プレビュー（並び：下→上）（上位30行）")
+st.dataframe(to_add.drop(columns=["__src_index", "__key__"]).head(30), use_container_width=True)
 
 # 追記開始行
 first_empty = find_first_empty_row(ws, start_row)
@@ -340,12 +351,14 @@ flagged = 0
 
 for _, row in to_add.iterrows():
     in_station, out_station = extract_in_out(row["移動区間"])
-    mismatch = (
-        prev_out_station is not None
-        and in_station is not None
-        and prev_out_station != in_station
-    )
 
+    # ★「入/出」が取れない行（例：入 共通）は比較を切る（誤検知防止）
+    if in_station is None and out_station is None:
+        mismatch = False
+    else:
+        mismatch = (prev_out_station is not None and in_station is not None and prev_out_station != in_station)
+
+    # 書き込み
     c_date = ws.cell(rr, 1)
     c_date.value = row["日付"]
     c_date.number_format = date_fmt
@@ -357,11 +370,15 @@ for _, row in to_add.iterrows():
     ws.cell(rr, 6).value = None
     ws.cell(rr, 7).value = None
 
+    # 色付け
     if mismatch:
-        ws.cell(rr, 4).fill = ALERT_FILL  # ★D列だけ赤
+        ws.cell(rr, 4).fill = ALERT_FILL
         flagged += 1
 
-    if out_station is not None:
+    # 次回判定用に「出」を更新（入/出が取れない行はチェーンを切る）
+    if in_station is None and out_station is None:
+        prev_out_station = None
+    elif out_station is not None:
         prev_out_station = out_station
 
     rr += 1
@@ -383,4 +400,3 @@ st.download_button(
     file_name=out_name,
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
-
